@@ -901,6 +901,7 @@ function GF.receiveRecipe(msg,sender)
       if name then record.recipeIds[prof][name]=tonumber(id) end
     end
     record.recipes[prof]=GF.translateRecipes(record,prof)
+    GF.noteNewsSpells(who,prof)
     requestUpdate()
   elseif action=='G' then
     if extra==key() then queueRecipes(prof) end
@@ -1493,6 +1494,8 @@ function GF.addNews(entry)
   store.news=store.news or {}
   local list=store.news
   entry.t=entry.t or now()
+  -- News is kept by ID where possible, so it reads the same on every client language (see GF.newsName).
+  if entry.name and not entry.spell then entry.spell=GF.newsSpell(entry.prof,entry.name) end
   for i=#list,math.max(1,#list-40),-1 do
     local e=list[i]
     if e.who==entry.who and e.kind==entry.kind and e.prof==entry.prof then
@@ -1551,19 +1554,43 @@ function GF.whoText(who)
   if who==key() then return '|cff40ff40You|r' end
   return '|cffffffff'..displayName(who)..'|r'
 end
+-- News lines don't depend on the language of whoever shared the data: a recipe is kept by its spell ID once known
+-- and shown by it; the name it arrived with is only the fallback. Professions are English keys, shown translated.
+-- The spell ID for a recipe name: shared by a guildmate (N), or one of your own recipes whose spell has that name.
+function GF.newsSpell(prof,name)
+  return GF.recipeSpell(prof,name) or GF.recipeSpellID(prof,name)
+end
+function GF.newsName(e)
+  local spell=e.spell and GF.spellName(e.spell)
+  if type(spell)=='string' and not isSecret(spell) and spell~='' then return clean(spell) end
+  return GF.recipeDisplay(e.prof,e.name)
+end
+-- A list's news is written as it arrives, before its spell IDs (N): attach them once they're here, and drop
+-- "first in the guild" when someone already knew the recipe under the name it has on this client.
+function GF.noteNewsSpells(who,prof)
+  for _,e in ipairs(GF.newsList()) do
+    if e.who==who and e.prof==prof and e.name and not e.spell then
+      e.spell=GF.newsSpell(prof,e.name)
+      local shown=e.spell and GF.newsName(e)
+      if e.first and shown and shown~=e.name and GF.othersKnow(who,prof,shown) then e.first=nil end
+    end
+  end
+end
 function GF.newsText(e)
   local who=GF.whoText(e.who)
   local prof=GF.professionLabel(e.prof)
   if e.kind=='skill' then return who..' reached |cffffd100'..e.value..'|r '..prof end
   if e.kind=='took' then return who..' took up '..prof end
   if e.kind=='learned' then
-    local name=GF.recipeDisplay(e.prof,e.name)
+    local name=GF.newsName(e)
+    -- Lines saved before their spell IDs arrived (or by an earlier version) are checked here too.
+    local first=e.first and not (name~=e.name and GF.othersKnow(e.who,e.prof,name))
     local info=recipeInfo and recipeInfo[e.prof] and recipeInfo[e.prof][name]
-    return who..' learned '..GF.recipeLabel(name,info)..(e.first and '  |cffff9933first in the guild|r' or '')
+    return who..' learned '..GF.recipeLabel(name,info)..(first and '  |cffff9933first in the guild|r' or '')
   end
   if e.kind=='learnedMany' then return who..' learned '..e.value..' '..prof..' recipes' end
   if e.kind=='filled' then
-    return who..' made '..((e.value or 1)>1 and (e.value..'× ') or '')..'|cffffd100'..GF.recipeDisplay(e.prof,e.name)..'|r for '..GF.whoText(e.other)
+    return who..' made '..((e.value or 1)>1 and (e.value..'× ') or '')..'|cffffd100'..GF.newsName(e)..'|r for '..GF.whoText(e.other)
   end
   return who
 end
@@ -2626,7 +2653,7 @@ function GF.drawHome(ctx)
       b.icon:SetTexture(professionIcons[e.prof or ''] or QUESTION_ICON)
       b.text:SetText(GF.newsText(e))
       b.when:SetText(GF.agoText(math.max(0,now()-(e.t or 0))))
-      local name=e.name and GF.recipeDisplay(e.prof,e.name)
+      local name=e.name and GF.newsName(e)
       local info=name and recipeInfo[e.prof or ''] and recipeInfo[e.prof][name]
       b:SetScript('OnEnter',function(self) if GF.showLinkTooltip(self,info and info.link) then GameTooltip:Show() end end)
       b:SetScript('OnLeave',GameTooltip_Hide)
