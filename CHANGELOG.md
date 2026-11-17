@@ -7,6 +7,7 @@ All notable changes to GuildForge are listed here.
 ### Fixed
 - **A profession's skill showed as 0 / 0** for a guildmate whose recipes for it were shared. This happened when GuildForge didn't recognise that profession in their skill list, for example a client in another language naming it differently from its spell and window (Cooking on a Spanish client). Their recipe list was also deleted and sent again over and over. Opening that profession's window now teaches GuildForge the name, remembered for later logins. A crafter whose skill wasn't shared shows **?** instead of 0 / 0.
 - **Guild news showed recipes in the language of whoever shared them**, and could call a recipe "first in the guild" only because its name was in another language. News now keeps each recipe by its spell ID once known and shows it in your language, including lines already saved; "first in the guild" is checked against the name it has on your client.
+- **Another profession's recipes listed under Not known in guild.** A guildmate's Enchanting list saved as Tailoring (fixed in 1.2.2) left its recipes filed under Tailoring. A recipe a guildmate lists under another profession is no longer shown there, and recipes filed under the wrong profession are removed at login. Recipes nobody in the guild knows yet stay.
 
 ### Changed
 - `/gf scan` also lists the skills it didn't count as professions.
