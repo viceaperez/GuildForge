@@ -961,7 +961,7 @@ local function commitScan(prof,recipes,warnFiltered,levels)
   for other,list in pairs(record.recipes) do
     if other~=prof and same(list,recipes) then
       record.recipes[other]=nil; record.recipeUpdated[other]=nil
-      log('Removed a copy of your '..prof..' recipes that was saved as '..other..'.')
+      log('Removed a copy of your '..GF.professionLabel(prof)..' recipes that was saved as '..GF.professionLabel(other)..'.')
     end
   end
   local old=record.recipes[prof]
@@ -972,7 +972,7 @@ local function commitScan(prof,recipes,warnFiltered,levels)
   if old and #recipes<#old then
     -- Every craft rescans the window, so say it in chat once per profession per session; the message log gets each one.
     if warnFiltered then
-      local text='Your '..prof..' window shows '..#recipes..' of your '..#old..' saved recipes, so GuildForge kept the saved list. A filter in the profession window (like Have Materials) can hide recipes.'
+      local text='Your '..GF.professionLabel(prof)..' window shows '..#recipes..' of your '..#old..' saved recipes, so GuildForge kept the saved list. A filter in the profession window (like Have Materials) can hide recipes.'
       if GF.filterWarned[prof] then if GF.note then GF.note(text) end
       else GF.filterWarned[prof]=true; log(text) end
     end
@@ -1010,7 +1010,8 @@ function GF.noteWindowSkill(prof,rank,maximum)
   local mine=db and db[key()]
   for _,p in ipairs(mine and mine.professions or {}) do if p.name==prof then return end end
   if GF.learnProfessionName(prof,rank,maximum) then
-    log('Your skill list names '..prof..' differently; learned it, now sharing your '..prof..' skill.')
+    local label=GF.professionLabel(prof)
+    log('Your skill list names '..label..' differently; learned it, now sharing your '..label..' skill.')
     save(); requestUpdate(); announce(false)
   end
 end
@@ -1552,15 +1553,17 @@ function GF.whoText(who)
 end
 function GF.newsText(e)
   local who=GF.whoText(e.who)
-  if e.kind=='skill' then return who..' reached |cffffd100'..e.value..'|r '..e.prof end
-  if e.kind=='took' then return who..' took up '..e.prof end
+  local prof=GF.professionLabel(e.prof)
+  if e.kind=='skill' then return who..' reached |cffffd100'..e.value..'|r '..prof end
+  if e.kind=='took' then return who..' took up '..prof end
   if e.kind=='learned' then
-    local info=recipeInfo and recipeInfo[e.prof] and recipeInfo[e.prof][e.name]
-    return who..' learned '..GF.recipeLabel(e.name,info)..(e.first and '  |cffff9933first in the guild|r' or '')
+    local name=GF.recipeDisplay(e.prof,e.name)
+    local info=recipeInfo and recipeInfo[e.prof] and recipeInfo[e.prof][name]
+    return who..' learned '..GF.recipeLabel(name,info)..(e.first and '  |cffff9933first in the guild|r' or '')
   end
-  if e.kind=='learnedMany' then return who..' learned '..e.value..' '..e.prof..' recipes' end
+  if e.kind=='learnedMany' then return who..' learned '..e.value..' '..prof..' recipes' end
   if e.kind=='filled' then
-    return who..' made '..((e.value or 1)>1 and (e.value..'× ') or '')..'|cffffd100'..e.name..'|r for '..GF.whoText(e.other)
+    return who..' made '..((e.value or 1)>1 and (e.value..'× ') or '')..'|cffffd100'..GF.recipeDisplay(e.prof,e.name)..'|r for '..GF.whoText(e.other)
   end
   return who
 end
@@ -1607,7 +1610,9 @@ function GF.queueMyRequests()
 end
 function GF.knowsRecipe(prof,name)
   local list=db and db[key()] and db[key()].recipes and db[key()].recipes[prof]
-  for _,n in ipairs(type(list)=='table' and list or {}) do if n==name then return true end end
+  -- A request from a client in another language names the recipe in that language; compare it in yours too.
+  local shown=GF.recipeDisplay(prof,name)
+  for _,n in ipairs(type(list)=='table' and list or {}) do if n==name or n==shown then return true end end
   return false
 end
 function GF.isOnline(who) return who==key() or guildOnline[nameId(who)]==true end
@@ -1667,7 +1672,7 @@ function GF.receiveRequest(action,who,extra)
     board[who][id]=r
     -- Only fresh posts are announced, not the ones caught up on at login.
     if isNew and tonumber(age)<600 and not r.takenBy and GF.knowsRecipe(prof,r.name) then
-      log(displayName(who)..' needs '..r.qty..'× '..r.name..', which you can make. See Requests in GuildForge.')
+      log(displayName(who)..' needs '..r.qty..'× '..GF.recipeDisplay(prof,r.name)..', which you can make. See Requests in GuildForge.')
     end
   elseif action=='Z' then
     local keep={}
@@ -1704,7 +1709,8 @@ function GF.allRequests(term)
   for who in pairs(board or {}) do
     if who==key() or members[who] or not GF.rosterComplete() then
       for _,r in ipairs(GF.requestsOf(who)) do
-        local text=(r.name..' '..r.prof..' '..displayName(who)..' '..(r.note or '')):lower()
+        local text=(r.name..' '..GF.recipeDisplay(r.prof,r.name)..' '..r.prof..' '..GF.professionLabel(r.prof)..' '
+          ..displayName(who)..' '..(r.note or '')):lower()
         if not term or term=='' or text:find(term,1,true) then list[#list+1]=r end
       end
     end
@@ -1773,7 +1779,52 @@ function GF.recipeIcon(prof,info)
   if kind=='e' and GetSpellTexture then return GetSpellTexture(id) or professionIcons[prof] end
   return professionIcons[prof] or QUESTION_ICON
 end
-function GF.recipeLabel(name,info)
+-- Display names: saved data and guild messages use the name as the sharer's client wrote it (recipes) or the
+-- English key (professions). What's shown is looked up by ID on this client, so it's in your language.
+-- A recipe's spell ID, from any guildmate who shared it under this name (N messages, checked by the sender).
+function GF.recipeSpell(prof,name)
+  if not prof or type(name)~='string' then return nil end
+  for _,record in pairs(db or {}) do
+    local ids=type(record)=='table' and record.recipeIds and record.recipeIds[prof]
+    local id=type(ids)=='table' and tonumber(ids[name])
+    if id then return id end
+  end
+end
+function GF.recipeDisplay(prof,name)
+  local id=GF.recipeSpell(prof,name)
+  local spell=id and GF.spellName(id)
+  if type(spell)=='string' and not isSecret(spell) and spell~='' then return clean(spell) end
+  return name
+end
+-- A profession's name in your language: its apprentice spell, else the game's name for its skill line ID, else
+-- the name learned from your own skill lines; the English key only when none of those answer.
+GF.professionLabels={}
+function GF.professionLabel(english)
+  if type(english)~='string' then return english end
+  if GF.professionLabels[english] then return GF.professionLabels[english] end
+  local label
+  local spell=GF.PROFESSION_SPELLS[english]
+  if spell then
+    local ok,n=pcall(GF.spellName,spell)
+    if ok and type(n)=='string' and not isSecret(n) and n~='' then label=n end
+  end
+  local T=C_TradeSkillUI
+  if not label and T and T.GetTradeSkillDisplayName then
+    for id,e in pairs(GF.SKILL_LINES) do
+      if e==english then
+        local ok,n=pcall(T.GetTradeSkillDisplayName,id)
+        if ok and type(n)=='string' and not isSecret(n) and n~='' then label=n end
+      end
+    end
+  end
+  if not label then for localName,e in pairs(GF.ownProfessionNames) do if e==english then label=localName; break end end end
+  if not label then return english end
+  GF.professionLabels[english]=label
+  return label
+end
+-- prof: when given, the name is shown in your language (see GF.recipeDisplay).
+function GF.recipeLabel(name,info,prof)
+  if prof then name=GF.recipeDisplay(prof,name) end
   local kind,id=splitLink(info and info.link)
   if kind=='i' then
     local _,_,quality=GetItemInfo(id)
@@ -1993,7 +2044,7 @@ function GF.buildIndex()
         local k=r.id or r.name
         if k then
           recipeIndex.usedIn[k]=recipeIndex.usedIn[k] or {}
-          table.insert(recipeIndex.usedIn[k],name)
+          table.insert(recipeIndex.usedIn[k],GF.recipeDisplay(prof,name))
         end
       end
     end
@@ -2099,7 +2150,8 @@ function GF.hasProfession(prof)
 end
 local function found(text,term) return text and text:lower():find(term,1,true)~=nil end
 function GF.recipeMatches(r,prof,term)
-  if term=='' or found(prof,term) or found(r.name,term) then return true end
+  if term=='' or found(prof,term) or found(GF.professionLabel(prof),term) or found(r.name,term)
+    or found(GF.recipeDisplay(prof,r.name),term) then return true end
   for _,c in ipairs(r.crafters) do if found(c.character,term) then return true end end
   for _,reagent in ipairs(r.info and r.info.reagents or {}) do
     if found(reagentName(reagent),term) then return true end
@@ -2112,7 +2164,7 @@ function GF.professionData(prof,term)
   local matsOnly=GuildForgeDB and GuildForgeDB.ui.matsOnly
   local d={crafters=crafters,recipes=recipes,crafterCount=#crafters,recipeCount=#recipes,fc={},fr={},unknown={},unknownTotal=0,ready=0,filter=filter}
   for _,c in ipairs(crafters) do
-    if term=='' or found(prof,term) or found(c.character,term) then d.fc[#d.fc+1]=c end
+    if term=='' or found(prof,term) or found(GF.professionLabel(prof),term) or found(c.character,term) then d.fc[#d.fc+1]=c end
     if c.key==filter then d.filterName=c.character end
     if not d.top or c.rank>d.top.rank then d.top=c end
   end
@@ -2401,6 +2453,7 @@ end
 function GF.showCrafterTooltip(owner,prof,c)
   GameTooltip:SetOwner(owner,'ANCHOR_RIGHT')
   GameTooltip:AddLine(c.character..(c.isMe and ' (You)' or ''),1,.82,0)
+  prof=GF.professionLabel(prof)
   GameTooltip:AddLine(c.max>0 and (prof..'  '..c.rank..' / '..c.max..'  ('..GF.rankTitle(c.max)..')') or (prof..'  skill not shared'),1,1,1)
   GameTooltip:AddLine(c.recipeCount..' recipes shared',.8,.8,.8)
   GameTooltip:AddLine(GF.availabilityText(c),1,1,1)
@@ -2430,9 +2483,10 @@ function GF.addRequestRow(ctx,r)
   local mine=r.who==key()
   local online=GF.isOnline(r.who)
   GF.setDot(b.dot,online)
-  local info=recipeInfo[r.prof] and recipeInfo[r.prof][r.name]
+  local shown=GF.recipeDisplay(r.prof,r.name)
+  local info=recipeInfo[r.prof] and (recipeInfo[r.prof][shown] or recipeInfo[r.prof][r.name])
   b.icon:SetTexture(GF.recipeIcon(r.prof,info))
-  b.name:SetText((r.qty>1 and ('|cffffffff'..r.qty..'×|r ') or '')..GF.recipeLabel(r.name,info))
+  b.name:SetText((r.qty>1 and ('|cffffffff'..r.qty..'×|r ') or '')..GF.recipeLabel(shown,info))
   local state=''
   if r.takenBy then state='  ·  |cff8fb8ff'..(r.takenBy==key() and 'you are making it' or (displayName(r.takenBy)..' is on it'))..'|r' end
   b.info:SetText('|cffa0a0a0'..(mine and 'You' or displayName(r.who))..'  ·  '..GF.agoText(now()-r.t)..'|r'..state)
@@ -2454,9 +2508,9 @@ function GF.addRequestRow(ctx,r)
       function() GF.takeRequest(r) end)
   end
   b:SetScript('OnEnter',function(self)
-    if not GF.showLinkTooltip(self,info and info.link) then GameTooltip:SetOwner(self,'ANCHOR_RIGHT'); GameTooltip:AddLine(r.name,1,.82,0) end
+    if not GF.showLinkTooltip(self,info and info.link) then GameTooltip:SetOwner(self,'ANCHOR_RIGHT'); GameTooltip:AddLine(shown,1,.82,0) end
     GameTooltip:AddLine(' ')
-    GameTooltip:AddLine((mine and 'You' or displayName(r.who))..' asked for '..r.qty..' ('..r.prof..'), '..GF.agoText(now()-r.t),1,1,1)
+    GameTooltip:AddLine((mine and 'You' or displayName(r.who))..' asked for '..r.qty..' ('..GF.professionLabel(r.prof)..'), '..GF.agoText(now()-r.t),1,1,1)
     if r.note then GameTooltip:AddLine('"'..r.note..'"',.9,.85,.6,true) end
     GameTooltip:AddLine('Requests close after '..GF.REQUEST_DAYS..' days.',.6,.6,.6)
     GameTooltip:Show()
@@ -2545,7 +2599,7 @@ function GF.drawHome(ctx)
       for _,p in ipairs(m.record.professions or {}) do
         if not GF.SECONDARY[p.name] then
           first=first or p.name
-          profs[#profs+1]=p.name..' |cffffd100'..p.rank..'|r'
+          profs[#profs+1]=GF.professionLabel(p.name)..' |cffffd100'..p.rank..'|r'
         end
       end
       b.icon:SetTexture(professionIcons[first or ''] or QUESTION_ICON)
@@ -2572,7 +2626,8 @@ function GF.drawHome(ctx)
       b.icon:SetTexture(professionIcons[e.prof or ''] or QUESTION_ICON)
       b.text:SetText(GF.newsText(e))
       b.when:SetText(GF.agoText(math.max(0,now()-(e.t or 0))))
-      local info=e.name and recipeInfo[e.prof or ''] and recipeInfo[e.prof][e.name]
+      local name=e.name and GF.recipeDisplay(e.prof,e.name)
+      local info=name and recipeInfo[e.prof or ''] and recipeInfo[e.prof][name]
       b:SetScript('OnEnter',function(self) if GF.showLinkTooltip(self,info and info.link) then GameTooltip:Show() end end)
       b:SetScript('OnLeave',GameTooltip_Hide)
       b:SetScript('OnClick',function()
@@ -2660,12 +2715,13 @@ update=function()
     nextStripe(b.stripe)
     GF.setDot(b.dot,cd.online)
     b.icon:SetTexture(professionIcons[cd.prof] or QUESTION_ICON)
-    b.text:SetText(cd.character..(cd.isMe and ' |cff40ff40(You)|r' or '')..'  |cffa0a0a0-|r  |cffffd100'..cd.name..'|r')
+    local shown=GF.recipeDisplay(cd.prof,cd.name)
+    b.text:SetText(cd.character..(cd.isMe and ' |cff40ff40(You)|r' or '')..'  |cffa0a0a0-|r  |cffffd100'..shown..'|r')
     b.status:SetText(cd.ready and '|cff40ff40Ready|r' or ('|cffffb040Ready in '..GF.durationText(cd.readyAt-now())..'|r'))
     b:SetScript('OnEnter',function(self)
       GameTooltip:SetOwner(self,'ANCHOR_RIGHT')
-      GameTooltip:AddLine(cd.name,1,.82,0)
-      GameTooltip:AddLine(cd.character..'  ('..cd.prof..')',1,1,1)
+      GameTooltip:AddLine(shown,1,.82,0)
+      GameTooltip:AddLine(cd.character..'  ('..GF.professionLabel(cd.prof)..')',1,1,1)
       GameTooltip:AddLine('Reported '..GF.updatedLabel(cd.updated),.6,.6,.6)
       GameTooltip:Show()
     end)
@@ -2687,7 +2743,7 @@ update=function()
     nextStripe(b.stripe,.045)
     b.selected:Hide()
     b.icon:SetTexture(GF.recipeIcon(prof,r.info))
-    b.name:SetText(GF.recipeLabel(r.name,r.info))
+    b.name:SetText(GF.recipeLabel(r.name,r.info,prof))
     local level=info.req and ('Req '..info.req..'  ·  ') or (info.gray and ('Gray at '..info.gray..'  ·  ')) or ''
     b.crafters:SetText('|cff808080'..level..(info.source or 'Trainer')..'|r')
     b.mats:SetText('')
@@ -2698,7 +2754,7 @@ update=function()
     b:SetScript('OnEnter',function(self)
       if not GF.showLinkTooltip(self,info.link) then
         GameTooltip:SetOwner(self,'ANCHOR_RIGHT')
-        GameTooltip:AddLine(r.name,1,.82,0)
+        GameTooltip:AddLine(GF.recipeDisplay(prof,r.name),1,.82,0)
       end
       GameTooltip:AddLine(' ')
       GameTooltip:AddLine('Nobody in the guild knows this yet',1,.5,.3)
@@ -2715,7 +2771,7 @@ update=function()
     nextStripe(b.stripe,.045)
     b.selected:SetShown(open)
     b.icon:SetTexture(GF.recipeIcon(prof,r.info))
-    b.name:SetText(GF.recipeLabel(r.name,r.info))
+    b.name:SetText(GF.recipeLabel(r.name,r.info,prof))
     if #r.crafters>0 then
       local names={}
       for i=1,math.min(2,#r.crafters) do
@@ -2738,7 +2794,7 @@ update=function()
     b:SetScript('OnEnter',function(self)
       if not GF.showLinkTooltip(self,r.info and r.info.link) then
         GameTooltip:SetOwner(self,'ANCHOR_RIGHT')
-        GameTooltip:AddLine(r.name,1,.82,0)
+        GameTooltip:AddLine(GF.recipeDisplay(prof,r.name),1,.82,0)
       end
       GameTooltip:AddLine(' ')
       if #r.crafters>0 then
@@ -2840,12 +2896,12 @@ update=function()
     for _,prof in ipairs(professions) do
       local d=overview and overview[prof] or GF.professionData(prof,term)
       totalCrafters=totalCrafters+d.crafterCount; totalRecipes=totalRecipes+d.recipeCount
-      local profMatch=searching and found(prof,term)
+      local profMatch=searching and (found(prof,term) or found(GF.professionLabel(prof),term))
       if not searching or profMatch or #d.fc>0 or #d.fr>0 then
         any=true
         local h=acquire('profHeader')
         h.icon:SetTexture(professionIcons[prof])
-        h.name:SetText(prof)
+        h.name:SetText(GF.professionLabel(prof))
         local info=d.crafterCount..' crafters'
         if d.recipeCount>0 then info=info..'  |cffa0a0a0·|r  '..d.recipeCount..' recipes' end
         if d.top then info=info..'  |cffa0a0a0·|r  Top: |cffffd100'..d.top.character..'|r ('..d.top.rank..')' end
@@ -2870,7 +2926,8 @@ update=function()
   elseif selected=='Shopping' then
     local entries={}
     for _,e in ipairs(shoppingEntries()) do
-      if not searching or found(e.name,term) or found(e.prof,term) then entries[#entries+1]=e end
+      if not searching or found(e.name,term) or found(GF.recipeDisplay(e.prof,e.name),term) or found(e.prof,term)
+        or found(GF.professionLabel(e.prof),term) then entries[#entries+1]=e end
     end
     if addSection('shop|recipes','Recipes to craft',#entries..' recipes') then
       if #entries==0 then addNote('Your shopping list is empty. Expand any recipe and click "Add to list".',16) end
@@ -2878,8 +2935,8 @@ update=function()
         local b=acquire('shopItem')
         nextStripe(b.stripe,.045)
         b.icon:SetTexture(GF.recipeIcon(e.prof,e.info))
-        b.name:SetText(GF.recipeLabel(e.name,e.info))
-        b.prof:SetText(e.prof)
+        b.name:SetText(GF.recipeLabel(e.name,e.info,e.prof))
+        b.prof:SetText(GF.professionLabel(e.prof))
         local times=craftableTimes(e.info)
         b.status:SetText(times==nil and '|cff808080Reagents unknown|r' or (times>=e.qty and '|cff40ff40Mats ready|r' or '|cffff5a5aMissing mats|r'))
         b.qty:SetText('x'..e.qty)
@@ -2949,7 +3006,7 @@ update=function()
     local prof=selected
     local d=GF.professionData(prof,term)
     if addSection(prof..'|crafters','Crafters',GF.countText(#d.fc,#d.crafters)) then
-      if #d.fc==0 then addNote('No guildmates have shared '..prof..' yet.',16) end
+      if #d.fc==0 then addNote('No guildmates have shared '..GF.professionLabel(prof)..' yet.',16) end
       for i,c in ipairs(d.fc) do addCrafter(prof,c,i,false) end
     end
     addCooldownSection(prof..'|cooldowns',prof)
@@ -2966,13 +3023,13 @@ update=function()
     if craftable[prof] and not d.filter then
       if addSection(prof..'|unknown','Not known in guild',GF.countText(#d.unknown,d.unknownTotal),true) then
         if d.unknownTotal==0 then
-          addNote('Visit a '..prof..' trainer (or open the profession on Forever) to list recipes nobody in the guild knows yet.',16)
+          addNote('Visit a '..GF.professionLabel(prof)..' trainer (or open the profession on Forever) to list recipes nobody in the guild knows yet.',16)
         end
         for _,r in ipairs(d.unknown) do addUnknown(prof,r) end
       end
     end
     headerIcon:SetTexture(professionIcons[prof])
-    headerTitle:SetText(prof)
+    headerTitle:SetText(GF.professionLabel(prof))
     local sub=#d.crafters..' crafters  ·  '..#d.recipes..' recipes'
     if craftable[prof] and d.ready>0 then sub=sub..'  ·  |cff40ff40'..d.ready..' you can craft now|r' end
     if d.filterName then sub=sub..'  ·  showing |cffffd100'..d.filterName..'|r (click again to clear)' end
@@ -3014,7 +3071,7 @@ local function makeTab(index,name)
   end)
   t:SetScript('OnEnter',function(self)
     GameTooltip:SetOwner(self,'ANCHOR_RIGHT')
-    GameTooltip:AddLine(specialTabs[name] or name,1,.82,0)
+    GameTooltip:AddLine(specialTabs[name] or GF.professionLabel(name),1,.82,0)
     if name=='Requests' then
       local n=GF.requestsYouCanMake()
       GameTooltip:AddLine(n>0 and (n..' you can make') or 'What guildmates need crafted',.85,.85,.85)
@@ -3499,7 +3556,7 @@ end
 function GF.askRequest(prof,name,qty)
   local d=GF.requestDialog()
   d.data={prof=prof,name=name}
-  d.title:SetText('Request '..name)
+  d.title:SetText('Request '..GF.recipeDisplay(prof,name))
   d.qty:SetText(tostring(GF.requestQty(qty))); d.note:SetText('')
   d:Show()
   d.qty:SetFocus(); d.qty:HighlightText()

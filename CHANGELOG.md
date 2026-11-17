@@ -9,6 +9,7 @@ All notable changes to GuildForge are listed here.
 
 ### Changed
 - `/gf scan` also lists the skills it didn't count as professions.
+- **Names show in your language everywhere.** Every recipe and profession name the window shows is looked up by ID on your client: recipe names in lists, requests, cooldowns, the shopping list, item tooltips and news use the recipe's spell when any guildmate shared it, and profession names (tabs, headers, tooltips, Home, chat messages) come from the game in your language. Search matches both, and a request posted in another language now counts as one you can make. Trainer recipes nobody in the guild knows stay in the language of whoever saw them, since no spell ID comes with them.
 
 ## [1.2.2] - 2026-11-17
 
