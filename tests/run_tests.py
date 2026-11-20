@@ -893,6 +893,21 @@ def test_spanish_client():
                 sent += sum(1 for m in p.lua.globals().OUT.values() if m[2][:2] in ('B|', 'L|'))
             deliver([pablo, bob])
     check('Spanish client: no re-download loop between languages', sent == 0, '%d list messages' % sent)
+    # Names by ID: Pablo's recipe shows in English on Bob's client, and a news line about it keeps its item details
+    # when they're filed under the Spanish name (details saved before its spell ID arrived).
+    shown = bob.lua.eval("GF_NS.recipeDisplay('Tailoring','Capa de lino')")
+    check('names by ID: a guildmate\'s recipe shows in your language', shown == 'Linen Cloak', str(shown))
+    news = bob.lua.execute("""local GF=GF_NS
+      GuildForgeDB.recipeInfo.Tailoring=GuildForgeDB.recipeInfo.Tailoring or {}
+      GuildForgeDB.recipeInfo.Tailoring['Linen Cloak']=nil
+      GuildForgeDB.recipeInfo.Tailoring['Capa de lino']={link='i2570',remote=true,reagents={}}
+      local who; for _,b in pairs(GuildForgeDB.guilds) do for w in pairs(b.members) do if w:find('Pablo') then who=w end end end
+      local got; local orig=GF.recipeLabel
+      GF.recipeLabel=function(n,info,...) got=info; return orig(n,info,...) end
+      local text=GF.newsText({who=who,kind='learned',prof='Tailoring',name='Capa de lino',t=time()})
+      GF.recipeLabel=orig
+      return (text:gsub('|c%x%x%x%x%x%x%x%x',''):gsub('|r',''))..' / '..tostring(got and got.link)""")
+    check('names by ID: news keeps a translated recipe\'s details', news.endswith('Linen Cloak / i2570'), news)
 
 
 if __name__ == '__main__':
