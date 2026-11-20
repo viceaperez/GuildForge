@@ -11,7 +11,9 @@ All notable changes to GuildForge are listed here.
 - `/gf scan` also lists the skills it didn't count as professions.
 - **Names show in your language everywhere.** Every recipe and profession name the window shows is looked up by ID on your client: recipe names in lists, requests, cooldowns, the shopping list, item tooltips and news use the recipe's spell when any guildmate shared it, and profession names (tabs, headers, tooltips, Home, chat messages) come from the game in your language. Search matches both, and a request posted in another language now counts as one you can make. Trainer recipes nobody in the guild knows stay in the language of whoever saw them, since no spell ID comes with them.
 
-## [1.2.2] - 2026-11-17
+## [1.2.2] - 2026-11-20
+
+Thanks to **Vichaoss** for this release.
 
 ### Fixed
 - **GuildForge didn't see your professions on a game client in another language** ([#3](https://github.com/TheFrosty02/GuildForge/issues/3)). It only knew the English profession names, so on a Spanish, German or other client it found no professions and shared no recipes. It now recognises professions in every language, and they reach the guild under the same names for everyone.
