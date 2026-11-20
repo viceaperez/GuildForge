@@ -161,7 +161,7 @@ local function releaseSearchFocus()
   if searchBox and searchBox:HasFocus() then searchBox:ClearFocus() end
 end
 -- requestUpdate: guild data changed (rebuild tooltip index too); requestRedraw: only bags/time changed.
-local function requestUpdate() updatePending=true; indexDirty=true end
+local function requestUpdate() updatePending=true; indexDirty=true; GF.dataVersion=(GF.dataVersion or 0)+1 end
 local function requestRedraw() updatePending=true end
 local scanRecipes, queueRecipes
 local db, recipeInfo, lastBroadcast= nil, nil, 0
@@ -939,6 +939,7 @@ function GF.receiveRecipe(msg,sender)
       local name=raw[tonumber(index)]
       if name then record.recipeIds[prof][name]=tonumber(id) end
     end
+    GF.recipeSpellMap=nil -- new IDs: look names up afresh (see GF.recipeSpell)
     record.recipes[prof]=GF.translateRecipes(record,prof)
     GF.noteNewsSpells(who,prof)
     requestUpdate()
@@ -1615,6 +1616,17 @@ function GF.noteNewsSpells(who,prof)
     end
   end
 end
+-- "First in the guild" for a line whose recipe shows here under another name than it arrived with: someone may
+-- know it under this one. Lines saved before their spell IDs arrived (or by an earlier version) are checked once,
+-- the first time they're shown, and the answer is saved with the line, so it doesn't change when others learn the
+-- recipe later and the Discord companion reads the same.
+function GF.stillFirst(e,name)
+  if not e.first then return false end
+  if name==e.name or e.firstName==name then return true end
+  if GF.othersKnow(e.who,e.prof,name) then e.first=nil; return false end
+  e.firstName=name
+  return true
+end
 function GF.newsText(e)
   local who=GF.whoText(e.who)
   local prof=GF.professionLabel(e.prof)
@@ -1622,9 +1634,9 @@ function GF.newsText(e)
   if e.kind=='took' then return who..' took up '..prof end
   if e.kind=='learned' then
     local name=GF.newsName(e)
-    -- Lines saved before their spell IDs arrived (or by an earlier version) are checked here too.
-    local first=e.first and not (name~=e.name and GF.othersKnow(e.who,e.prof,name))
-    local info=recipeInfo and recipeInfo[e.prof] and recipeInfo[e.prof][name]
+    local first=GF.stillFirst(e,name)
+    -- Details are filed under the name the sharer used; the name shown may be a translation of it.
+    local info=recipeInfo and recipeInfo[e.prof] and (recipeInfo[e.prof][name] or recipeInfo[e.prof][e.name])
     return who..' learned '..GF.recipeLabel(name,info)..(first and '  |cffff9933first in the guild|r' or '')
   end
   if e.kind=='learnedMany' then return who..' learned '..e.value..' '..prof..' recipes' end
@@ -1848,13 +1860,25 @@ end
 -- Display names: saved data and guild messages use the name as the sharer's client wrote it (recipes) or the
 -- English key (professions). What's shown is looked up by ID on this client, so it's in your language.
 -- A recipe's spell ID, from any guildmate who shared it under this name (N messages, checked by the sender).
+-- Names are looked up for every row, tooltip and search, so every guildmate's IDs go into one table, rebuilt
+-- after guild data changes (requestUpdate) instead of scanning each member on every lookup.
 function GF.recipeSpell(prof,name)
   if not prof or type(name)~='string' then return nil end
-  for _,record in pairs(db or {}) do
-    local ids=type(record)=='table' and record.recipeIds and record.recipeIds[prof]
-    local id=type(ids)=='table' and tonumber(ids[name])
-    if id then return id end
+  local map=GF.recipeSpellMap
+  if not map or map.version~=GF.dataVersion or map.db~=db then
+    map={version=GF.dataVersion,db=db,ids={}}
+    for _,record in pairs(db or {}) do
+      for p,ids in pairs(type(record)=='table' and type(record.recipeIds)=='table' and record.recipeIds or {}) do
+        if type(ids)=='table' then
+          local known=map.ids[p] or {}
+          map.ids[p]=known
+          for n,id in pairs(ids) do if known[n]==nil then known[n]=tonumber(id) end end
+        end
+      end
+    end
+    GF.recipeSpellMap=map
   end
+  return map.ids[prof] and map.ids[prof][name]
 end
 function GF.recipeDisplay(prof,name)
   local id=GF.recipeSpell(prof,name)
@@ -2704,7 +2728,7 @@ function GF.drawHome(ctx)
       b.text:SetText(GF.newsText(e))
       b.when:SetText(GF.agoText(math.max(0,now()-(e.t or 0))))
       local name=e.name and GF.newsName(e)
-      local info=name and recipeInfo[e.prof or ''] and recipeInfo[e.prof][name]
+      local info=name and recipeInfo[e.prof or ''] and (recipeInfo[e.prof][name] or recipeInfo[e.prof][e.name])
       b:SetScript('OnEnter',function(self) if GF.showLinkTooltip(self,info and info.link) then GameTooltip:Show() end end)
       b:SetScript('OnLeave',GameTooltip_Hide)
       b:SetScript('OnClick',function()
