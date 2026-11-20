@@ -908,6 +908,26 @@ def test_spanish_client():
       GF.recipeLabel=orig
       return (text:gsub('|c%x%x%x%x%x%x%x%x',''):gsub('|r',''))..' / '..tostring(got and got.link)""")
     check('names by ID: news keeps a translated recipe\'s details', news.endswith('Linen Cloak / i2570'), news)
+    # First in the guild, for news saved under the Spanish name: dropped if someone here already knows the recipe
+    # under its English name, and otherwise kept, also once someone learns it later.
+    first = bob.lua.execute("""local GF=GF_NS
+      local who, mine; for _,b in pairs(GuildForgeDB.guilds) do for w,r in pairs(b.members) do
+        if w:find('Pablo') then who=w elseif w:find('Bob') then mine=r end end end
+      local function shows(e) return GF.newsText(e):find('first in the guild',1,true)~=nil end
+      local rest=mine.recipes.Tailoring
+      local known={who=who,kind='learned',prof='Tailoring',name='Capa de lino',first=true,t=time()}
+      mine.recipes.Tailoring={'Bolt of Linen Cloth','Linen Cloak'}
+      local a=shows(known)
+      mine.recipes.Tailoring=rest
+      local fresh={who=who,kind='learned',prof='Tailoring',name='Capa de lino',first=true,t=time()}
+      local b1=shows(fresh)
+      mine.recipes.Tailoring={'Bolt of Linen Cloth','Linen Cloak'}
+      local b2=shows(fresh)
+      mine.recipes.Tailoring=rest
+      return tostring(a)..','..tostring(known.first)..','..tostring(b1)..','..tostring(b2)""")
+    check('news: first in the guild is dropped when someone knows it under your name, and saved',
+          first.startswith('false,nil'), first)
+    check('news: first in the guild stays when others learn the recipe later', first.endswith('true,true'), first)
 
 
 if __name__ == '__main__':

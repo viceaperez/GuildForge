@@ -1577,6 +1577,17 @@ function GF.noteNewsSpells(who,prof)
     end
   end
 end
+-- "First in the guild" for a line whose recipe shows here under another name than it arrived with: someone may
+-- know it under this one. Lines saved before their spell IDs arrived (or by an earlier version) are checked once,
+-- the first time they're shown, and the answer is saved with the line, so it doesn't change when others learn the
+-- recipe later and the Discord companion reads the same.
+function GF.stillFirst(e,name)
+  if not e.first then return false end
+  if name==e.name or e.firstName==name then return true end
+  if GF.othersKnow(e.who,e.prof,name) then e.first=nil; return false end
+  e.firstName=name
+  return true
+end
 function GF.newsText(e)
   local who=GF.whoText(e.who)
   local prof=GF.professionLabel(e.prof)
@@ -1584,8 +1595,7 @@ function GF.newsText(e)
   if e.kind=='took' then return who..' took up '..prof end
   if e.kind=='learned' then
     local name=GF.newsName(e)
-    -- Lines saved before their spell IDs arrived (or by an earlier version) are checked here too.
-    local first=e.first and not (name~=e.name and GF.othersKnow(e.who,e.prof,name))
+    local first=GF.stillFirst(e,name)
     -- Details are filed under the name the sharer used; the name shown may be a translation of it.
     local info=recipeInfo and recipeInfo[e.prof] and (recipeInfo[e.prof][name] or recipeInfo[e.prof][e.name])
     return who..' learned '..GF.recipeLabel(name,info)..(first and '  |cffff9933first in the guild|r' or '')
