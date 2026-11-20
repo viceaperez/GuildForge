@@ -2,6 +2,11 @@
 
 All notable changes to GuildForge are listed here.
 
+## [Unreleased]
+
+### Fixed
+- **Another profession's recipes listed under Not known in guild.** A guildmate's Enchanting list saved as Tailoring (fixed in 1.2.2) left its recipes filed under Tailoring. A recipe a guildmate lists under another profession is no longer shown there, and recipes filed under the wrong profession are removed at login. Recipes nobody in the guild knows yet stay.
+
 ## [1.2.3] - 2026-11-20
 
 ### Added
