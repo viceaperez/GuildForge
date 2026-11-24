@@ -410,6 +410,52 @@ def test_unknown_sorted_by_skill():
     check('Not known in guild is sorted by profession skill', order == expected, str(order))
 
 
+def test_misfiled_recipe_details():
+    # Before 1.2.2 a client in another language could save a guildmate's Enchanting list as Tailoring too. The copy
+    # is gone, but its recipe details stayed filed under Tailoring and showed in its Not known in guild.
+    kota, bob = guild_of([('Kota', 'Arkbinky', ['Enchanting', 30, 75], ['Enchant Bracer - Minor Health']),
+                          ('Bob', 'Smith', ['Tailoring', 24, 75], ['Bolt of Linen Cloth'])])
+    bob.lua.execute("""local t=GuildForgeDB.recipeInfo.Tailoring
+      t['Enchant Bracer - Minor Health']={reagents={},remote=true}
+      t['Heavy Linen Gloves']={reagents={},remote=true}
+      t['Red Linen Robe']={reagents={},remote=true,source='Trainer'}""")
+    d = bob.lua.globals().GF_TEST_unknown('Tailoring')
+    unknown = [d[i] for i in range(1, len(d) + 1)]
+    check('misfiled: another profession\'s recipe is not in Not known in guild',
+          unknown == ['Heavy Linen Gloves', 'Red Linen Robe'], str(unknown))
+    # At login the misfiled detail is removed; a recipe nobody knows yet and a trainer recipe stay.
+    bob.lua.execute('if GF_NS.pruneOrphanDetails then GF_NS.pruneOrphanDetails() end')
+    kept = bob.lua.execute("local out={} for n in pairs(GuildForgeDB.recipeInfo.Tailoring) do out[#out+1]=n end "
+                           "table.sort(out) return table.concat(out,',')")
+    check('misfiled: login removes only the misfiled details',
+          'Enchant Bracer' not in kept and 'Heavy Linen Gloves' in kept and 'Red Linen Robe' in kept
+          and 'Bolt of Linen Cloth' in kept, kept)
+    # Since 1.3.0 the Enchanter's list arrives by ID and is named in Bob's language, while the leftovers kept the
+    # copy's Spanish names: they're recognised by link instead (from Kota's details, or the recipe ID itself).
+    bob.lua.execute("""local store; for _,b in pairs(GuildForgeDB.guilds) do store=b end
+      for w,r in pairs(store.members) do if w:find('Kota') then
+        r.recipes.Enchanting={'Enchant Bracer - Minor Health','Enchant Cloak - Minor Agility'}
+        r.recipeRaw=r.recipeRaw or {}
+        r.recipeRaw.Enchanting={'13419','7779'}
+      end end
+      local ri=GuildForgeDB.recipeInfo
+      ri.Enchanting=ri.Enchanting or {}
+      ri.Enchanting['Enchant Bracer - Minor Health']={link='e7779',remote=true,reagents={}}
+      ri.Tailoring['Encantar brazales: salud menor']={link='e7779',remote=true,reagents={}}
+      ri.Tailoring['Encantar capa: agilidad menor']={link='e13419',remote=true,reagents={}}
+      ri.Tailoring['Heavy Linen Gloves'].link='i4307'""")
+    d = bob.lua.globals().GF_TEST_unknown('Tailoring')
+    unknown = [d[i] for i in range(1, len(d) + 1)]
+    check('misfiled: recognised by link when the names differ (1.3.0)',
+          unknown == ['Heavy Linen Gloves', 'Red Linen Robe'], str(unknown))
+    bob.lua.execute('if GF_NS.pruneOrphanDetails then GF_NS.pruneOrphanDetails() end')
+    kept = bob.lua.execute("local out={} for n in pairs(GuildForgeDB.recipeInfo.Tailoring) do out[#out+1]=n end "
+                           "table.sort(out) return table.concat(out,',')")
+    check('misfiled: login removes them by link, and keeps the rest',
+          'Encantar' not in kept and 'Heavy Linen Gloves' in kept and 'Red Linen Robe' in kept
+          and 'Bolt of Linen Cloth' in kept, kept)
+
+
 def test_message_log():
     roster = "ROSTER={{'Kota Arkbinky',true},{'Bob Smith',true}}"
     realm = 'CAMWOW US2 Realm 1 PvE'
@@ -1207,6 +1253,7 @@ if __name__ == '__main__':
     test_forever_profession_window()
     test_forever_catalog_cleared()
     test_unknown_sorted_by_skill()
+    test_misfiled_recipe_details()
     test_message_log()
     test_discord_bot()
     test_forever_cooldowns()
