@@ -591,6 +591,27 @@ def test_filtered_scan_warns_once():
           '%d messages, %d saved: %s' % (len(said), saved, said))
 
 
+def test_update_notice():
+    # An older version hears about a newer one once per session; the newer one, and dev builds, hear nothing.
+    roster = "ROSTER={{'Arcbinky',true},{'Fortbek',true},{'Zed',true}}; PRINTED={}; print=function(s) PRINTED[#PRINTED+1]=s end;"
+    old = Player('Arcbinky', ['Tailoring', 50, 75], ['Bolt of Linen Cloth'], setup=roster + "ADDON_VERSION='1.2.2'")
+    new = Player('Fortbek', ['Mining', 50, 75], [], setup=roster + "ADDON_VERSION='v1.3.0'")
+    dev = Player('Zed', ['Mining', 5, 75], [], setup=roster)
+    players = (old, new, dev)
+    for p in players:
+        p.fire('PLAYER_LOGIN')
+    for _ in range(3):
+        for p in players:
+            p.lua.globals().SlashCmdList.GUILDFORGE('sync')
+        run(list(players), steps=120)
+    def notices(p):
+        return [m for m in p.lua.globals().PRINTED.values() if ' is out (' in m]
+    ok = len(notices(old)) == 1 and '1.3.0' in notices(old)[0] and not notices(new) and not notices(dev) \
+        and old.lua.eval('GF_NS.newestVersion') == '1.3.0'
+    check('update notice: once, only for older versions', ok,
+          '%s | %s | %s' % (notices(old), notices(new), notices(dev)))
+
+
 def test_tab_clears_search():
     # A search left over from one tab would turn Home and All into search results.
     a, g = bank_player()
@@ -780,6 +801,91 @@ def test_guild_news():
           and 'first in the guild' in rows and 'Bob Smith' in rows and 'Tailoring' in rows, rows)
 
 
+def test_profession_named_differently():
+    # Ana's skill list words Cooking differently from its window (seen on a Spanish client), so it wasn't found
+    # and guildmates saw her Cooking as 0 / 0. Opening the window learns the name.
+    differs = r"""
+      function GetLocale() return 'esES' end
+      function GetNumSkillLines() return 3 end
+      function GetSkillLineInfo(i)
+        if i==1 then return 'Professions',true end
+        if i==2 then return 'Tailoring',false,nil,50,nil,nil,75 end
+        return 'Arte culinario',false,nil,SKILL[2],nil,nil,SKILL[3]
+      end
+      function GetTradeSkillLine() return SKILL[1],SKILL[2],SKILL[3] end
+    """
+    roster = "ROSTER={{'Ana Zar',true},{'Bob Smith',true}};"
+    ana = Player('Ana', ['Cooking', 40, 75], ['Spiced Wolf Meat'], 'CAMWOW US2 Realm 1 PvE',
+                 setup=roster + NEWS_HELPERS + differs, surname='Zar')
+    bob = Player('Bob', ['Tailoring', 24, 75], ['Bolt of Linen Cloth'], 'CAMWOW US2 Realm 1 PvE',
+                 setup=roster + NEWS_HELPERS, surname='Smith')
+    for p in (ana, bob):
+        p.fire('PLAYER_LOGIN')
+    run([ana, bob])
+    before = bob.lua.execute(GF_SKILL_OF % 'Ana')
+    ana.fire('TRADE_SKILL_SHOW')
+    run([ana, bob])
+    learned = ana.lua.eval("((GuildForgeDB.professionNames or {}).esES or {})['Arte culinario']")
+    seen = bob.lua.execute(GF_SKILL_OF % 'Ana')
+    check('profession named differently: the window teaches the name, kept per language', learned == 'Cooking', str(learned))
+    check('profession named differently: guildmates see the real skill, not 0 / 0',
+          before == '' and seen == '40/75', 'before %r, after %r' % (before, seen))
+    news = ana.lua.globals().GF_TEST_news()
+    check('profession named differently: not news that you took it up', 'took' not in news, news)
+
+    # Maxed Cooking (300/300) matches a language skill too, so the name can't be learned: share the window's skill.
+    lines = r"""
+      function GetLocale() return 'esES' end
+      LINES={{'Profesiones',true,true},{'Arte culinario',false,nil,300,nil,nil,300},
+             {'Idiomas',true,true},{'Lengua: común',false,nil,300,nil,nil,300}}
+      function GetNumSkillLines() return #LINES end
+      function GetSkillLineInfo(i) return unpack(LINES[i]) end
+      function GetTradeSkillLine() return SKILL[1],SKILL[2],SKILL[3] end
+    """
+    roster = "ROSTER={{'Cara Zar',true},{'Bob Smith',true}};"
+    cara = Player('Cara', ['Cooking', 300, 300], ['Spiced Wolf Meat'], 'CAMWOW US2 Realm 1 PvE',
+                  setup=roster + NEWS_HELPERS + lines, surname='Zar')
+    bob2 = Player('Bob', ['Tailoring', 24, 75], ['Bolt of Linen Cloth'], 'CAMWOW US2 Realm 1 PvE',
+                  setup=roster + NEWS_HELPERS, surname='Smith')
+    for p in (cara, bob2):
+        p.fire('PLAYER_LOGIN')
+    run([cara, bob2])
+    cara.fire('TRADE_SKILL_SHOW')
+    run([cara, bob2])
+    saved = """(function() for _,t in pairs(GuildForgeDB.windowSkills or {}) do
+      if t.Cooking then return t.Cooking.rank..'/'..t.Cooking.max end end return '' end)()"""
+    seen, kept = bob2.lua.execute(GF_SKILL_OF % 'Cara'), cara.lua.eval(saved)
+    check('profession named differently: maxed and tied with a language, guildmates still see the skill',
+          seen == '300/300' and kept == '300/300', 'seen %r, saved %r' % (seen, kept))
+    news = cara.lua.globals().GF_TEST_news()
+    check('profession named differently: tied, still not news that you took it up', 'took' not in news, news)
+    # A new weapon skill, or a collapsed section, doesn't drop it.
+    cara.lua.execute("LINES[#LINES+1]={'Espadas',false,nil,1,nil,nil,300}")
+    cara.fire('SKILL_LINES_CHANGED')
+    cara.lua.execute("LINES[3]={'Idiomas',true,false}; table.remove(LINES,4)")
+    cara.fire('SKILL_LINES_CHANGED')
+    cara.lua.execute("LINES[3]={'Idiomas',true,true}; table.insert(LINES,4,{'Lengua: común',false,nil,300,nil,nil,300})")
+    cara.fire('SKILL_LINES_CHANGED')
+    run([cara, bob2])
+    kept = cara.lua.eval(saved)
+    check('profession named differently: a new skill or a collapsed section keeps it', kept == '300/300', kept)
+    # Unlearning it removes its line: no longer shared.
+    cara.lua.execute("table.remove(LINES,2)")
+    cara.fire('SKILL_LINES_CHANGED')
+    run([cara, bob2])
+    seen, kept = bob2.lua.execute(GF_SKILL_OF % 'Cara'), cara.lua.eval(saved)
+    check('profession named differently: unlearned at max level, no longer shared',
+          seen == '' and kept == '', 'seen %r, saved %r' % (seen, kept))
+
+
+# A member's Cooking skill as "rank/max" (empty when none was shared).
+GF_SKILL_OF = """local out=''
+  for _,b in pairs(GuildForgeDB.guilds) do for who,r in pairs(b.members) do
+    if who:find('%s') then for _,p in ipairs(r.professions or {}) do
+      if p.name=='Cooking' then out=p.rank..'/'..p.max end end end end end
+  return out"""
+
+
 def test_request_board():
     kota, bob, cara = guild_of([('Kota', 'Arkbinky', ['First Aid', 9, 75], ['Linen Bandage']),
                                 ('Bob', 'Smith', ['Tailoring', 24, 75], ['Bolt of Linen Cloth']),
@@ -858,11 +964,20 @@ SPANISH = r"""
     [3914]='Rollo de paño de lino',[2387]='Capa de lino'}
   function GetSpellInfo(id) return SPELLS[id] end
   function GetLocale() return 'esES' end
+  SPELLS[18560]='Tela lunar'; SPELLS[17187]='Transmutar: arcanita'
   RECIPE_SPELLS={['Rollo de paño de lino']=3914,['Capa de lino']=2387}
+  RECIPE_ITEMS={['Rollo de paño de lino']=2996,['Capa de lino']=2570}
+  function GetTradeSkillItemLink(i) return '|Hitem:'..(RECIPE_ITEMS[TS_RECIPES[i]] or 1)..'::|h[x]|h' end
+  -- Pablo knows Mooncloth, three days to go.
+  function IsPlayerSpell(id) return id==18560 end
+  function GetSpellCooldown(id) if id==18560 then return GetTime(),3*86400 end return 0,0 end
   function GetTradeSkillRecipeLink(i) local id=RECIPE_SPELLS[TS_RECIPES[i]]; return id and ('|Hspell:'..id..'|h[x]|h') end
 """
 ENGLISH = r"""
-  SPELLS={[3908]='Tailoring',[3914]='Bolt of Linen Cloth',[2387]='Linen Cloak'}
+  SPELLS={[3908]='Tailoring',[3914]='Bolt of Linen Cloth',[2387]='Linen Cloak',[18560]='Mooncloth',[17187]='Transmute: Arcanite'}
+  RECIPE_ITEMS={['Bolt of Linen Cloth']=2996,['Linen Cloak']=2570}
+  function GetTradeSkillItemLink(i) return '|Hitem:'..(RECIPE_ITEMS[TS_RECIPES[i]] or 1)..'::|h[x]|h' end
+  function GetItemInfo(id) if id==9999 then return 'Linen Hood' end end
   local old=GetSpellInfo
   function GetSpellInfo(id) return SPELLS[id] or old(id) end
 """
@@ -890,30 +1005,41 @@ def test_spanish_client():
             for p in (pablo, bob):
                 p.step()
             for p in (pablo, bob):
-                sent += sum(1 for m in p.lua.globals().OUT.values() if m[2][:2] in ('B|', 'L|'))
+                sent += sum(1 for m in p.lua.globals().OUT.values() if m[2][:2] in ('B|', 'L|', 'F|', 'J|'))
             deliver([pablo, bob])
     check('Spanish client: no re-download loop between languages', sent == 0, '%d list messages' % sent)
-    # Names by ID: Pablo's recipe shows in English on Bob's client, and a news line about it keeps its item details
-    # when they're filed under the Spanish name (details saved before its spell ID arrived).
-    shown = bob.lua.eval("GF_NS.recipeDisplay('Tailoring','Capa de lino')")
-    check('names by ID: a guildmate\'s recipe shows in your language', shown == 'Linen Cloak', str(shown))
+    # Names by ID, for data by name (a 1.2.x guildmate's list, whose spell IDs came in N messages): Pablo's recipe
+    # shows in English on Bob's client, and a news line about it keeps its item details when they're filed under
+    # the Spanish name (details saved before its spell ID arrived). What the test changes is put back afterwards.
     news = bob.lua.execute("""local GF=GF_NS
-      GuildForgeDB.recipeInfo.Tailoring=GuildForgeDB.recipeInfo.Tailoring or {}
-      GuildForgeDB.recipeInfo.Tailoring['Linen Cloak']=nil
-      GuildForgeDB.recipeInfo.Tailoring['Capa de lino']={link='i2570',remote=true,reagents={}}
-      local who; for _,b in pairs(GuildForgeDB.guilds) do for w in pairs(b.members) do if w:find('Pablo') then who=w end end end
+      local who, record; for _,b in pairs(GuildForgeDB.guilds) do for w,r in pairs(b.members) do
+        if w:find('Pablo') then who, record=w, r end end end
+      local t=GuildForgeDB.recipeInfo.Tailoring
+      local oldIds, oldCloak, oldCapa=record.recipeIds, t['Linen Cloak'], t['Capa de lino']
+      record.recipeIds={Tailoring={['Capa de lino']=2387}}
+      GF.recipeSpellMap=nil
+      local shown=GF.recipeDisplay('Tailoring','Capa de lino')
+      t['Linen Cloak']=nil
+      t['Capa de lino']={link='i2570',remote=true,reagents={}}
       local got; local orig=GF.recipeLabel
       GF.recipeLabel=function(n,info,...) got=info; return orig(n,info,...) end
       local text=GF.newsText({who=who,kind='learned',prof='Tailoring',name='Capa de lino',t=time()})
       GF.recipeLabel=orig
-      return (text:gsub('|c%x%x%x%x%x%x%x%x',''):gsub('|r',''))..' / '..tostring(got and got.link)""")
+      record.recipeIds, t['Linen Cloak'], t['Capa de lino']=oldIds, oldCloak, oldCapa
+      GF.recipeSpellMap=nil
+      return shown..' | '..(text:gsub('|c%x%x%x%x%x%x%x%x',''):gsub('|r',''))..' / '..tostring(got and got.link)""")
+    check('names by ID: a guildmate\'s recipe shows in your language', news.startswith('Linen Cloak | '), news)
     check('names by ID: news keeps a translated recipe\'s details', news.endswith('Linen Cloak / i2570'), news)
-    # First in the guild, for news saved under the Spanish name: dropped if someone here already knows the recipe
-    # under its English name, and otherwise kept, also once someone learns it later.
+    # First in the guild, for news saved under the Spanish name (from a 1.2.x guildmate's list by name, whose spell
+    # IDs came in N messages): dropped if someone here already knows the recipe under its English name, and
+    # otherwise kept, also once someone learns it later. What the test changes is put back afterwards.
     first = bob.lua.execute("""local GF=GF_NS
-      local who, mine; for _,b in pairs(GuildForgeDB.guilds) do for w,r in pairs(b.members) do
-        if w:find('Pablo') then who=w elseif w:find('Bob') then mine=r end end end
+      local who, mine, pablo; for _,b in pairs(GuildForgeDB.guilds) do for w,r in pairs(b.members) do
+        if w:find('Pablo') then who, pablo=w, r elseif w:find('Bob') then mine=r end end end
       local function shows(e) return GF.newsText(e):find('first in the guild',1,true)~=nil end
+      local oldIds=pablo.recipeIds
+      pablo.recipeIds={Tailoring={['Capa de lino']=2387}}
+      GF.recipeSpellMap=nil
       local rest=mine.recipes.Tailoring
       local known={who=who,kind='learned',prof='Tailoring',name='Capa de lino',first=true,t=time()}
       mine.recipes.Tailoring={'Bolt of Linen Cloth','Linen Cloak'}
@@ -924,10 +1050,143 @@ def test_spanish_client():
       mine.recipes.Tailoring={'Bolt of Linen Cloth','Linen Cloak'}
       local b2=shows(fresh)
       mine.recipes.Tailoring=rest
+      pablo.recipeIds=oldIds
+      GF.recipeSpellMap=nil
       return tostring(a)..','..tostring(known.first)..','..tostring(b1)..','..tostring(b2)""")
     check('news: first in the guild is dropped when someone knows it under your name, and saved',
           first.startswith('false,nil'), first)
     check('news: first in the guild stays when others learn the recipe later', first.endswith('true,true'), first)
+    # Not known in guild: a trainer recipe in Spanish that a guildmate knows in English isn't "unknown", and one
+    # recipe seen at trainers in both languages is listed once, in yours.
+    bob.lua.execute("""local t=GuildForgeDB.recipeInfo.Tailoring
+      t['Capa de lino']={link='i2570',source='Trainer',remote=true,reagents={}}
+      t['Gorro de lino']={link='i9999',source='Trainer',remote=true,reagents={}}
+      t['Linen Hood']={link='i9999',source='Trainer',remote=true,reagents={}}""")
+    unknown = list(bob.lua.globals().GF_TEST_unknown('Tailoring').values())
+    check('languages: Not known in guild matches recipes by item', unknown == ['Linen Hood'], str(unknown))
+    # The same, for an item the game hasn't cached yet (no name for its link): one row, named, and no error.
+    bob.lua.execute("""local t=GuildForgeDB.recipeInfo.Tailoring
+      t['Gorro de lino']=nil; t['Linen Hood']=nil
+      t['Botas de lino']={link='i8888',source='Trainer',remote=true,reagents={}}
+      t['Linen Boots']={link='i8888',source='Trainer',remote=true,reagents={}}""")
+    try:
+        unknown = list(bob.lua.globals().GF_TEST_unknown('Tailoring').values())
+    except Exception as e:
+        unknown = [str(e).splitlines()[0]]
+    check('languages: Not known in guild with an item not cached yet', unknown == ['Botas de lino'], str(unknown))
+    # A request in English for a recipe Pablo knows in Spanish: he's told he can make it.
+    bob.lua.eval("GF_NS.postRequest('Tailoring','Bolt of Linen Cloth',2)")
+    run([pablo, bob], steps=60)
+    can = pablo.lua.eval('GF_NS.requestsYouCanMake()')
+    shown = pablo.lua.eval('GF_NS.requestName(GF_NS.allRequests()[1])')
+    check('languages: a request is recognised and shown in your language', can == 1 and shown == 'Rollo de paño de lino',
+          '%s can make, shown as %r' % (can, shown))
+    # Cooldowns go out under a shared key and show in each reader's language.
+    pablo.lua.execute("GF_NS.doRefresh()")
+    bob.lua.globals().SlashCmdList.GUILDFORGE('sync')
+    run([pablo, bob], steps=80)
+    keys = pablo.lua.execute("local out={} for _,b in pairs(GuildForgeDB.guilds) do for w,r in pairs(b.members) do for n in pairs(r.cooldowns or {}) do out[#out+1]=n end end end return table.concat(out,',')")
+    bob_cds = bob.lua.execute("local out={} for _,cd in ipairs((GF_NS.gatherCooldowns(nil,''))) do out[#out+1]=GF_NS.cooldownLabel(cd.name) end return table.concat(out,',')")
+    labels = pablo.lua.eval("GF_NS.cooldownLabel('Mooncloth')..'|'..GF_NS.cooldownLabel('Transmute')")
+    check('languages: cooldowns shared under one key, shown in your language',
+          keys == 'Mooncloth' and bob_cds == 'Mooncloth' and labels == 'Tela lunar|Transmutar', '%r | %r | %r' % (keys, bob_cds, labels))
+
+
+# 1.3.0: recipe lists by ID. A tailor with 60 recipes, each with a spell named like it.
+ID_RECIPES = ['Tailored Item Number %02d of the Long Recipe List' % i for i in range(1, 61)]
+ID_SETUP = r"""
+  RECIPE_IDS={}
+  for i=1,61 do RECIPE_IDS['Tailored Item Number '..string.format('%02d',i)..' of the Long Recipe List']=20000+i end
+  local byId={}
+  for name,id in pairs(RECIPE_IDS) do byId[id]=name end
+  function GetSpellInfo(id) return byId[id] or 'Spell' end
+  function GetTradeSkillRecipeLink(i) local id=RECIPE_IDS[TS_RECIPES[i]]; return id and ('|Henchant:'..id..'|h[x]|h') end
+"""
+# 1.2.3, the last version that sends lists by name, for the comparisons below (from git history).
+def old_source():
+    import subprocess
+    try:
+        return subprocess.run(['git', 'show', '5c89a69:GuildForge.lua'], cwd=HERE, capture_output=True, check=True,
+                              text=True, encoding='utf-8').stdout
+    except Exception:
+        return None
+
+
+def counting_run(players, steps):
+    """Runs the guild and counts recipe-channel messages each player sends."""
+    counts = {p.name: 0 for p in players}
+    for _ in range(steps):
+        for p in players:
+            p.step()
+        for p in players:
+            counts[p.name] += sum(1 for m in p.lua.globals().OUT.values() if m[1] == 'GFORGE_R')
+        deliver(players)
+    return counts
+
+
+def tailor_pair(source=None, bob_source=None):
+    roster = "ROSTER={{'Kota',true},{'Bob',true}};"
+    kota = Player('Kota', ['Tailoring', 150, 225], ID_RECIPES, setup=roster + ID_SETUP, source=source)
+    bob = Player('Bob', ['Mining', 50, 75], [], setup=roster + ID_SETUP, source=bob_source)
+    for p in (kota, bob):
+        p.fire('PLAYER_LOGIN')
+    counting_run([kota, bob], 40)
+    kota.fire('TRADE_SKILL_SHOW')
+    return kota, bob
+
+
+def test_id_sync(old_source):
+    # The same 60-recipe list, sent by 1.2.3 (names) and by 1.3.0 (IDs).
+    kota, bob = tailor_pair(source=old_source, bob_source=old_source)
+    old_sent = counting_run([kota, bob], 400)['Kota']
+    kota, bob = tailor_pair()
+    new_sent = counting_run([kota, bob], 400)['Kota']
+    got = bob.members().get('Kota')
+    check('1.3.0: a recipe list takes fewer messages by ID', got == (1, 60) and new_sent < old_sent * 0.8,
+          'Bob sees %s; %d messages by ID vs %d by name' % (got, new_sent, old_sent))
+    # Learning one recipe sends just the change.
+    kota.lua.globals().TS_RECIPES = kota.lua.table(*(ID_RECIPES + ['Tailored Item Number 61 of the Long Recipe List']))
+    kota.fire('TRADE_SKILL_UPDATE')
+    sent = counting_run([kota, bob], 100)['Kota']
+    got = bob.members().get('Kota')
+    check('1.3.0: a new recipe sends only the change', got == (1, 61) and sent <= 2, 'Bob sees %s after %d messages' % (got, sent))
+    # A guildmate who missed the change (holding an older list) pulls the whole list instead.
+    bob.lua.execute("for _,b in pairs(GuildForgeDB.guilds) do for w,r in pairs(b.members) do if w:find('Kota') then r.recipeRaw.Tailoring={'x'} end end end")
+    kota.lua.globals().TS_RECIPES = kota.lua.table(*ID_RECIPES)
+    kota.fire('TRADE_SKILL_UPDATE')  # dropped back to 60 can't happen in game, but the window says so
+    kota.lua.globals().TS_RECIPES = kota.lua.table(*(ID_RECIPES + ['Tailored Item Number 61 of the Long Recipe List']))
+    bob.lua.globals().SlashCmdList.GUILDFORGE('sync')
+    counting_run([kota, bob], 400)
+    raw = bob.lua.execute("for _,b in pairs(GuildForgeDB.guilds) do for w,r in pairs(b.members) do if w:find('Kota') then return #r.recipeRaw.Tailoring end end end")
+    check('1.3.0: a guildmate out of step pulls the whole list', raw == 61, 'Bob holds %s' % raw)
+    # The Discord bot reads the saved names, not the IDs.
+    bot, guild = bot_view(bob)
+    msg = str(bot.build_crafts(guild, 'Kota', 'Tailoring'))
+    check('1.3.0: Discord bot shows recipe names', 'Tailored Item Number 01' in msg and '61 recipes' in msg and '200' not in msg, msg[:200])
+
+
+def test_mixed_versions(old_source):
+    # 1.3.0 and 1.2.3 in one guild: each sees the other's recipes, and check-ins settle with no list re-sent.
+    roster = "ROSTER={{'Kota',true},{'Bob',true}};"
+    kota = Player('Kota', ['Tailoring', 150, 225], ID_RECIPES[:20], setup=roster + ID_SETUP)
+    bob = Player('Bob', ['Tailoring', 120, 225], ID_RECIPES[20:30], setup=roster + ID_SETUP, source=old_source)
+    for p in (kota, bob):
+        p.fire('PLAYER_LOGIN')
+        p.fire('TRADE_SKILL_SHOW')
+    counting_run([kota, bob], 500)
+    ok = kota.members().get('Bob') == (1, 10) and bob.members().get('Kota') == (1, 20)
+    check('mixed 1.3.0 and 1.2.3: both see each other', ok, 'Kota sees %s, Bob sees %s' % (kota.members().get('Bob'), bob.members().get('Kota')))
+    lists = 0
+    for _ in range(3):
+        for p in (kota, bob):
+            p.lua.globals().SlashCmdList.GUILDFORGE('sync')
+        lists += sum(counting_run([kota, bob], 150).values())
+    check('mixed 1.3.0 and 1.2.3: check-ins settle (no lists re-sent)', lists <= 6, '%d recipe messages' % lists)
+    # Kota learns a recipe while Bob (1.2.3) is online: Bob gets it.
+    kota.lua.globals().TS_RECIPES = kota.lua.table(*ID_RECIPES[:21])
+    kota.fire('TRADE_SKILL_UPDATE')
+    counting_run([kota, bob], 200)
+    check('mixed 1.3.0 and 1.2.3: a change reaches the older version', bob.members().get('Kota') == (1, 21), str(bob.members().get('Kota')))
 
 
 if __name__ == '__main__':
@@ -952,11 +1211,19 @@ if __name__ == '__main__':
     test_discord_bot()
     test_forever_cooldowns()
     test_filtered_scan_warns_once()
+    test_update_notice()
     test_tab_clears_search()
     test_guild_bank_hidden()
     test_guild_bank_requests()
     test_guild_news()
+    test_profession_named_differently()
     test_request_board()
     test_spanish_client()
+    old = old_source()
+    if old:
+        test_id_sync(old)
+        test_mixed_versions(old)
+    else:
+        print('SKIP 1.3.0 comparisons (needs the git history for 1.2.3)')
     print('\n%d failed' % len(failures) if failures else '\nall passed')
     sys.exit(1 if failures else 0)
