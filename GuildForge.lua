@@ -376,25 +376,66 @@ function GF.initDB()
   GF.pruneOrphanDetails()
   selectedTab=professionIcons[GuildForgeDB.ui.tab or ''] and GuildForgeDB.ui.tab or 'Home'
 end
+-- Which professions guildmates list each recipe under, by name and by link, from their lists as named here
+-- (recipes) and as sent (recipeRaw: names before 1.3.0, recipe IDs since). A link comes from the guildmate's
+-- details for that recipe, or from a recipe ID itself (an enchant's link is its spell). names[n] and links[l] hold
+-- the profession, or a set of them when there are several (rare, so most entries cost no table).
+function GF.listedRecipes(memberTables)
+  local names,links={},{}
+  local function add(set,k,prof)
+    if not k then return end
+    local v=set[k]
+    if v==nil then set[k]=prof
+    elseif v~=prof then
+      if type(v)=='table' then v[prof]=true else set[k]={[v]=true,[prof]=true} end
+    end
+  end
+  for _,members in ipairs(memberTables) do
+    for _,record in pairs(type(members)=='table' and members or {}) do
+      for _,field in ipairs({'recipes','recipeRaw'}) do
+        for prof,list in pairs(type(record)=='table' and type(record[field])=='table' and record[field] or {}) do
+          for _,n in ipairs(type(list)=='table' and list or {}) do
+            if type(n)=='string' then
+              add(names,n,prof)
+              local info=recipeInfo and recipeInfo[prof] and recipeInfo[prof][n]
+              add(links,type(info)=='table' and info.link or nil,prof)
+              if tonumber(n) then add(links,'e'..n,prof) end
+            end
+          end
+        end
+      end
+    end
+  end
+  return names,links
+end
+-- Whether an entry of GF.listedRecipes has a profession besides prof, and whether it has prof.
+function GF.listedElsewhere(v,prof)
+  if type(v)~='table' then return v~=nil and v~=prof end
+  for p in pairs(v) do if p~=prof then return true end end
+  return false
+end
+function GF.listedUnder(v,prof)
+  if type(v)=='table' then return v[prof]==true end
+  return v==prof
+end
 -- A list saved under the wrong profession (Enchanting as Tailoring, fixed in 1.2.2) left its recipe details filed
 -- there. Such a detail is one nothing names under its own profession (no guildmate's list, request or shopping
--- entry) while a guildmate lists that recipe under another profession. Recipes nobody knows yet are listed
--- nowhere and are kept, as are trainer entries and your own scans.
+-- entry) while a guildmate lists that recipe under another profession, by its name or, since lists travel by ID
+-- (1.3.0) and are named in your language, by its link. Recipes nobody knows yet are listed nowhere and are kept,
+-- as are trainer entries and your own scans.
 function GF.pruneOrphanDetails()
-  local used,listed={},{}
+  local used={}
   for key in pairs(GuildForgeDB.shopping or {}) do used[key]=true end
   -- Data saved before guilds were kept apart sits in GuildForgeDB.members until it's moved; count it too.
   local stores={{members=GuildForgeDB.members}}
   for _,guild in pairs(GuildForgeDB.guilds or {}) do stores[#stores+1]=guild end
+  local memberTables={}
   for _,guild in ipairs(stores) do
+    memberTables[#memberTables+1]=type(guild)=='table' and guild.members or nil
     for _,record in pairs(type(guild)=='table' and type(guild.members)=='table' and guild.members or {}) do
       for _,field in ipairs({'recipes','recipeRaw'}) do
         for prof,list in pairs(type(record)=='table' and type(record[field])=='table' and record[field] or {}) do
-          for _,name in ipairs(type(list)=='table' and list or {}) do
-            used[prof..'|'..name]=true
-            listed[name]=listed[name] or {}
-            listed[name][prof]=true
-          end
+          for _,name in ipairs(type(list)=='table' and list or {}) do used[prof..'|'..name]=true end
         end
       end
     end
@@ -404,10 +445,15 @@ function GF.pruneOrphanDetails()
       end
     end
   end
+  local names,links=GF.listedRecipes(memberTables)
   local removed=0
   for prof,list in pairs(recipeInfo or {}) do
     for name,info in pairs(list) do
-      if type(info)=='table' and info.remote and not info.source and not used[prof..'|'..name] and listed[name] then
+      -- By link only when this profession doesn't list it too (one item two professions make isn't misfiled).
+      local byLink=type(info)=='table' and info.link and GF.listedElsewhere(links[info.link],prof)
+        and not GF.listedUnder(links[info.link],prof)
+      if type(info)=='table' and info.remote and not info.source and not used[prof..'|'..name]
+        and (GF.listedElsewhere(names[name],prof) or byLink) then
         list[name]=nil; removed=removed+1
       end
     end
@@ -1743,6 +1789,44 @@ local function currentMembers()
   end
   return list
 end
+-- Which of prof's candidate recipes (names, and links) a current guildmate lists under another profession: by
+-- name, or by link (a detail's, or a recipe ID's for enchants; see GF.listedRecipes). Only the candidates are
+-- looked for, so nothing is built for the rest of the guild's recipes on every redraw.
+function GF.otherProfessionHits(prof,names,links)
+  local hitNames,hitLinks={},{}
+  if next(names)==nil then return hitNames,hitLinks end
+  local spells,anySpell={},false
+  for link in pairs(links) do
+    local id=tonumber(link:match('^e(%d+)$') or '')
+    if id then spells[id]=link; anySpell=true end
+  end
+  local anyLink=next(links)~=nil
+  for _,record in pairs(currentMembers()) do
+    if type(record)=='table' then
+      -- Lists as named here: by name, and by the link of the guildmate's details for that recipe.
+      for other,list in pairs(type(record.recipes)=='table' and record.recipes or {}) do
+        if other~=prof and type(list)=='table' then
+          local infos=anyLink and recipeInfo and recipeInfo[other]
+          for _,n in ipairs(list) do
+            if names[n] then hitNames[n]=true end
+            local info=infos and infos[n]
+            if type(info)=='table' and info.link and links[info.link] then hitLinks[info.link]=true end
+          end
+        end
+      end
+      -- Lists as sent: names before 1.3.0, recipe IDs since (an enchant's link is its spell).
+      for other,list in pairs(type(record.recipeRaw)=='table' and record.recipeRaw or {}) do
+        if other~=prof and type(list)=='table' then
+          for _,n in ipairs(list) do
+            if names[n] then hitNames[n]=true end
+            if anySpell then local link=spells[tonumber(n) or 0]; if link then hitLinks[link]=true end end
+          end
+        end
+      end
+    end
+  end
+  return hitNames,hitLinks
+end
 -- Deletes saved records for people who have left the guild.
 function GF.pruneFormerMembers()
   if not db or db==tempMembers or not GF.rosterComplete() then return end
@@ -2497,19 +2581,19 @@ function GF.professionData(prof,term)
   -- language list the same recipe under another name; its link says it's the same one.
   -- A recipe a guildmate lists under another profession was filed here by a misnamed copy (Enchanting saved as
   -- Tailoring before 1.2.2); it isn't one of this profession's.
-  local elsewhere={}
-  for _,record in pairs(currentMembers()) do
-    -- recipeRaw: the names as the guildmate sent them, which is how a copy's details were filed.
-    for _,field in ipairs({'recipes','recipeRaw'}) do
-      for other,list in pairs(type(record)=='table' and type(record[field])=='table' and record[field] or {}) do
-        if other~=prof and type(list)=='table' then for _,n in ipairs(list) do elsewhere[n]=true end end
-      end
-    end
-  end
+  -- By name, or by link: since 1.3.0 a guildmate's list is named in your language, not the copy's.
   local knownLinks,byLink,unknownNames={},{},{}
   for _,r in ipairs(recipes) do if r.info and r.info.link then knownLinks[r.info.link]=true end end
+  local candidates,candidateLinks={},{}
   for name,info in pairs(recipeInfo and recipeInfo[prof] or {}) do
-    if not byName[name] and not elsewhere[name] and type(info)=='table' and not (info.link and knownLinks[info.link]) then
+    if not byName[name] and type(info)=='table' and not (info.link and knownLinks[info.link]) then
+      candidates[name]=info
+      if info.link then candidateLinks[info.link]=true end
+    end
+  end
+  local elsewhere,elsewhereLinks=GF.otherProfessionHits(prof,candidates,candidateLinks)
+  for name,info in pairs(candidates) do
+    if not elsewhere[name] and not (info.link and elsewhereLinks[info.link]) then
       if info.link then
         if not byLink[info.link] then byLink[info.link]={}; unknownNames[#unknownNames+1]=info.link end
         table.insert(byLink[info.link],name)
