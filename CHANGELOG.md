@@ -5,12 +5,39 @@ All notable changes to GuildForge are listed here.
 ## [Unreleased]
 
 ### Fixed
-- **A profession's skill showed as 0 / 0** for a guildmate whose recipes for it were shared. This happened when GuildForge didn't recognise that profession in their skill list, for example a client in another language naming it differently from its spell and window (Cooking on a Spanish client). Their recipe list was also deleted and sent again over and over. Opening that profession's window now teaches GuildForge the name, remembered for later logins. A crafter whose skill wasn't shared shows **?** instead of 0 / 0.
 - **Guild news showed recipes in the language of whoever shared them**, and could call a recipe "first in the guild" only because its name was in another language. News now keeps each recipe by its spell ID once known and shows it in your language, including lines already saved; "first in the guild" is checked against the name it has on your client.
 
 ### Changed
-- `/gf scan` also lists the skills it didn't count as professions.
 - **Names show in your language everywhere.** Every recipe and profession name the window shows is looked up by ID on your client: recipe names in lists, requests, cooldowns, the shopping list, item tooltips and news use the recipe's spell when any guildmate shared it, and profession names (tabs, headers, tooltips, Home, chat messages) come from the game in your language. Search matches both, and a request posted in another language now counts as one you can make. Trainer recipes nobody in the guild knows stay in the language of whoever saw them, since no spell ID comes with them.
+
+## [1.3.0] - 2026-11-23
+
+Thanks to **Vichaoss** for the fixes in this release.
+
+### Changed
+- **Recipe lists travel as recipe IDs instead of names.** Each guildmate's game names them in their own language, so there's nothing to translate, and a full list takes about half the messages (a 60-recipe list: 10 instead of 21).
+- **Learning a recipe sends just that change**: one or two messages instead of the whole list (about 20). A guildmate who missed it, or holds an older list, downloads the whole list as before.
+- The first time you log in on this version, guildmates' lists download once in the new format.
+- `/gf scan` also lists the skills it didn't count as professions.
+
+### Note
+- **Guildmates on 1.2.x keep syncing** with you: they still get lists by name, both when they ask and when your list changes while they're online. The update notice from 1.2.3 tells them a new version is out.
+- The Discord bot needs no changes: it still reads recipe names.
+
+### Fixed
+- **A profession's skill showed as 0 / 0** for a guildmate whose recipes for it were shared. This happened when GuildForge didn't recognise that profession in their skill list, for example a client in another language naming it differently from its spell and window (Cooking on a Spanish client). Their recipe list was also deleted and sent again over and over. Opening that profession's window now fixes it, and it's remembered for later logins. A crafter whose skill wasn't shared shows **?** instead of 0 / 0.
+- **Opening a profession could raise a Lua error** ("attempt to index field 'info'"), and **Not known in guild** could show a code like `i250486` instead of a recipe name. This happened since 1.2.3 with a recipe seen under names in two languages whose item the game hadn't loaded yet. Such a recipe is now listed under one of its names.
+
+## [1.2.3] - 2026-11-20
+
+### Added
+- **Update notice.** When a guildmate is on a newer GuildForge, you're told once per session in chat, and the bottom of the window shows the new version until you update. Test and development builds never prompt.
+
+### Fixed
+- **Trainer recipes, requests and cooldowns across languages.** 1.2.2 brought professions and recipes to every game language; these three still went by name, so a guild mixing languages saw them twice or not at all:
+  - A recipe seen at a trainer in another language no longer shows under **Not known in guild** when a guildmate knows it, and one seen at trainers in two languages is listed once, in yours.
+  - Requests show in your language, and you're told you can make one even when it was posted in another. (The requester needs 1.2.3 for this.)
+  - Cooldowns (Mooncloth, transmutes, Salt Shaker) are shared under one name and shown in yours. On non-English clients, transmutes are now grouped into one entry, as on English ones.
 
 ## [1.2.2] - 2026-11-20
 
