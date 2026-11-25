@@ -423,13 +423,6 @@ def test_misfiled_recipe_details():
     unknown = [d[i] for i in range(1, len(d) + 1)]
     check('misfiled: another profession\'s recipe is not in Not known in guild',
           unknown == ['Heavy Linen Gloves', 'Red Linen Robe'], str(unknown))
-    # At login the misfiled detail is removed; a recipe nobody knows yet and a trainer recipe stay.
-    bob.lua.execute('if GF_NS.pruneOrphanDetails then GF_NS.pruneOrphanDetails() end')
-    kept = bob.lua.execute("local out={} for n in pairs(GuildForgeDB.recipeInfo.Tailoring) do out[#out+1]=n end "
-                           "table.sort(out) return table.concat(out,',')")
-    check('misfiled: login removes only the misfiled details',
-          'Enchant Bracer' not in kept and 'Heavy Linen Gloves' in kept and 'Red Linen Robe' in kept
-          and 'Bolt of Linen Cloth' in kept, kept)
     # Since 1.3.0 the Enchanter's list arrives by ID and is named in Bob's language, while the leftovers kept the
     # copy's Spanish names: they're recognised by link instead (from Kota's details, or the recipe ID itself).
     bob.lua.execute("""local store; for _,b in pairs(GuildForgeDB.guilds) do store=b end
@@ -448,12 +441,6 @@ def test_misfiled_recipe_details():
     unknown = [d[i] for i in range(1, len(d) + 1)]
     check('misfiled: recognised by link when the names differ (1.3.0)',
           unknown == ['Heavy Linen Gloves', 'Red Linen Robe'], str(unknown))
-    bob.lua.execute('if GF_NS.pruneOrphanDetails then GF_NS.pruneOrphanDetails() end')
-    kept = bob.lua.execute("local out={} for n in pairs(GuildForgeDB.recipeInfo.Tailoring) do out[#out+1]=n end "
-                           "table.sort(out) return table.concat(out,',')")
-    check('misfiled: login removes them by link, and keeps the rest',
-          'Encantar' not in kept and 'Heavy Linen Gloves' in kept and 'Red Linen Robe' in kept
-          and 'Bolt of Linen Cloth' in kept, kept)
 
 
 def test_message_log():

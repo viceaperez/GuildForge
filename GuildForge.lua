@@ -373,92 +373,7 @@ function GF.initDB()
   GuildForgeDB.cooldownsV2=true
   -- 1.2.0 added the Home tab; open there once, then remember whatever tab was last used.
   if not GuildForgeDB.homeV1 then GuildForgeDB.ui.tab='Home'; GuildForgeDB.homeV1=true end
-  GF.pruneOrphanDetails()
   selectedTab=professionIcons[GuildForgeDB.ui.tab or ''] and GuildForgeDB.ui.tab or 'Home'
-end
--- Which professions guildmates list each recipe under, by name and by link, from their lists as named here
--- (recipes) and as sent (recipeRaw: names before 1.3.0, recipe IDs since). A link comes from the guildmate's
--- details for that recipe, or from a recipe ID itself (an enchant's link is its spell). names[n] and links[l] hold
--- the profession, or a set of them when there are several (rare, so most entries cost no table).
-function GF.listedRecipes(memberTables)
-  local names,links={},{}
-  local function add(set,k,prof)
-    if not k then return end
-    local v=set[k]
-    if v==nil then set[k]=prof
-    elseif v~=prof then
-      if type(v)=='table' then v[prof]=true else set[k]={[v]=true,[prof]=true} end
-    end
-  end
-  for _,members in ipairs(memberTables) do
-    for _,record in pairs(type(members)=='table' and members or {}) do
-      for _,field in ipairs({'recipes','recipeRaw'}) do
-        for prof,list in pairs(type(record)=='table' and type(record[field])=='table' and record[field] or {}) do
-          for _,n in ipairs(type(list)=='table' and list or {}) do
-            if type(n)=='string' then
-              add(names,n,prof)
-              local info=recipeInfo and recipeInfo[prof] and recipeInfo[prof][n]
-              add(links,type(info)=='table' and info.link or nil,prof)
-              if tonumber(n) then add(links,'e'..n,prof) end
-            end
-          end
-        end
-      end
-    end
-  end
-  return names,links
-end
--- Whether an entry of GF.listedRecipes has a profession besides prof, and whether it has prof.
-function GF.listedElsewhere(v,prof)
-  if type(v)~='table' then return v~=nil and v~=prof end
-  for p in pairs(v) do if p~=prof then return true end end
-  return false
-end
-function GF.listedUnder(v,prof)
-  if type(v)=='table' then return v[prof]==true end
-  return v==prof
-end
--- A list saved under the wrong profession (Enchanting as Tailoring, fixed in 1.2.2) left its recipe details filed
--- there. Such a detail is one nothing names under its own profession (no guildmate's list, request or shopping
--- entry) while a guildmate lists that recipe under another profession, by its name or, since lists travel by ID
--- (1.3.0) and are named in your language, by its link. Recipes nobody knows yet are listed nowhere and are kept,
--- as are trainer entries and your own scans.
-function GF.pruneOrphanDetails()
-  local used={}
-  for key in pairs(GuildForgeDB.shopping or {}) do used[key]=true end
-  -- Data saved before guilds were kept apart sits in GuildForgeDB.members until it's moved; count it too.
-  local stores={{members=GuildForgeDB.members}}
-  for _,guild in pairs(GuildForgeDB.guilds or {}) do stores[#stores+1]=guild end
-  local memberTables={}
-  for _,guild in ipairs(stores) do
-    memberTables[#memberTables+1]=type(guild)=='table' and guild.members or nil
-    for _,record in pairs(type(guild)=='table' and type(guild.members)=='table' and guild.members or {}) do
-      for _,field in ipairs({'recipes','recipeRaw'}) do
-        for prof,list in pairs(type(record)=='table' and type(record[field])=='table' and record[field] or {}) do
-          for _,name in ipairs(type(list)=='table' and list or {}) do used[prof..'|'..name]=true end
-        end
-      end
-    end
-    for _,posted in pairs(type(guild)=='table' and guild.requests or {}) do
-      for _,r in pairs(type(posted)=='table' and posted or {}) do
-        if type(r)=='table' and r.prof and r.name then used[r.prof..'|'..r.name]=true end
-      end
-    end
-  end
-  local names,links=GF.listedRecipes(memberTables)
-  local removed=0
-  for prof,list in pairs(recipeInfo or {}) do
-    for name,info in pairs(list) do
-      -- By link only when this profession doesn't list it too (one item two professions make isn't misfiled).
-      local byLink=type(info)=='table' and info.link and GF.listedElsewhere(links[info.link],prof)
-        and not GF.listedUnder(links[info.link],prof)
-      if type(info)=='table' and info.remote and not info.source and not used[prof..'|'..name]
-        and (GF.listedElsewhere(names[name],prof) or byLink) then
-        list[name]=nil; removed=removed+1
-      end
-    end
-  end
-  if removed>0 then log('Removed '..removed..' recipes that were filed under the wrong profession.') end
 end
 -- A record keeps recipes and cooldowns only for professions it still has (after someone drops one).
 -- Returns whether any recipes, and whether any cooldowns, were removed.
@@ -1790,7 +1705,7 @@ local function currentMembers()
   return list
 end
 -- Which of prof's candidate recipes (names, and links) a current guildmate lists under another profession: by
--- name, or by link (a detail's, or a recipe ID's for enchants; see GF.listedRecipes). Only the candidates are
+-- name, or by link (a detail's, or a recipe ID's for enchants, whose link is its spell). Only the candidates are
 -- looked for, so nothing is built for the rest of the guild's recipes on every redraw.
 function GF.otherProfessionHits(prof,names,links)
   local hitNames,hitLinks={},{}
