@@ -6,7 +6,7 @@ All notable changes to GuildForge are listed here.
 
 ### Fixed
 - **Guild news showed recipes in the language of whoever shared them**, and could call a recipe "first in the guild" only because its name was in another language. News now keeps each recipe by its spell ID once known and shows it in your language, including lines already saved; "first in the guild" is checked against the name it has on your client.
-- **Another profession's recipes listed under Not known in guild.** A guildmate's Enchanting list saved as Tailoring (fixed in 1.2.2) left its recipes filed under Tailoring. A recipe a guildmate lists under another profession is no longer shown there, and recipes filed under the wrong profession are removed at login. Recipes nobody in the guild knows yet stay.
+- **Another profession's recipes listed under Not known in guild.** A guildmate's Enchanting list saved as Tailoring (fixed in 1.2.2) left its recipes filed under Tailoring. A recipe a guildmate lists under another profession is no longer shown there; recipes nobody in the guild knows yet still are. **Clear my data** in Settings removes the leftover entries.
 
 ### Changed
 - **Names show in your language everywhere.** Every recipe and profession name the window shows is looked up by ID on your client: recipe names in lists, requests, cooldowns, the shopping list, item tooltips and news use the recipe's spell when any guildmate shared it, and profession names (tabs, headers, tooltips, Home, chat messages) come from the game in your language. Search matches both, and a request posted in another language now counts as one you can make. Trainer recipes nobody in the guild knows stay in the language of whoever saw them, since no spell ID comes with them.
